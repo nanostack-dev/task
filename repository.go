@@ -15,11 +15,12 @@ type Repository struct {
 // CreateTask inserts a new task into the database.
 func (r *Repository) CreateTask(ctx context.Context, task *Task) (*Task, error) {
 	query := `
-		INSERT INTO tasks (id, name, payload, status, priority, created_at, updated_at, scheduled_at, max_retry, retry_count)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, name, payload, status, priority, created_at, updated_at, scheduled_at, max_retry, retry_count
+		INSERT INTO tasks (%s)
+		VALUES (%s)
+		RETURNING %s;
 	`
-
+	query = fmt.Sprintf(query, TaskAllColumns[0], TaskAllColumns[1], TaskAllColumns[0])
+	logger.Debugf("Query: %s", query)
 	row := r.DB.QueryRowContext(
 		ctx, query,
 		task.ID,
@@ -30,7 +31,6 @@ func (r *Repository) CreateTask(ctx context.Context, task *Task) (*Task, error) 
 		task.CreatedAt,
 		task.UpdatedAt,
 		task.ScheduledAt,
-		task.MaxRetry,
 		task.RetryCount,
 	)
 
@@ -44,7 +44,6 @@ func (r *Repository) CreateTask(ctx context.Context, task *Task) (*Task, error) 
 		&createdTask.CreatedAt,
 		&createdTask.UpdatedAt,
 		&createdTask.ScheduledAt,
-		&createdTask.MaxRetry,
 		&createdTask.RetryCount,
 	)
 	if err != nil {
@@ -64,9 +63,10 @@ type TaskUpdates struct {
 // GetTask retrieves a task by its ID.
 func (r *Repository) GetTask(ctx context.Context, id string) (*Task, error) {
 	query := `
-		SELECT id, payload, status, priority, created_at, updated_at
+		SELECT %s
 		FROM tasks WHERE id = $1;
 	`
+	query = fmt.Sprintf(query, TaskAllColumns)
 	task := &Task{}
 	err := r.DB.QueryRowContext(ctx, query, id).Scan(
 		&task.ID,
@@ -77,7 +77,6 @@ func (r *Repository) GetTask(ctx context.Context, id string) (*Task, error) {
 		&task.UpdatedAt,
 		&task.ScheduledAt,
 		&task.RetryCount,
-		&task.MaxRetry,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -87,13 +86,12 @@ func (r *Repository) GetTask(ctx context.Context, id string) (*Task, error) {
 	}
 	return task, nil
 }
-
 func (r *Repository) UpdateTask(ctx context.Context, taskID string, updates TaskUpdates) error {
 	query := "UPDATE tasks SET"
 	args := []interface{}{}
 	argIndex := 1
-	now := time.Now()
-	// Dynamic updates
+	now := time.Now().UTC() // Ensure UTC format for PostgreSQL
+
 	if updates.Status != nil {
 		query += fmt.Sprintf(" status = $%d,", argIndex)
 		args = append(args, *updates.Status)
@@ -111,8 +109,11 @@ func (r *Repository) UpdateTask(ctx context.Context, taskID string, updates Task
 		args = append(args, *updates.ScheduledAt)
 		argIndex++
 	}
+
 	query += fmt.Sprintf(" updated_at = $%d,", argIndex)
 	args = append(args, now)
+	argIndex++
+
 	// Remove trailing comma
 	query = query[:len(query)-1]
 
@@ -179,7 +180,7 @@ type SortOption struct {
 func (r *Repository) SearchTasks(
 	ctx context.Context, filter TaskFilter, opts QueryOptions,
 ) ([]*Task, error) {
-	query := `SELECT ` + GetAllTaskColumns() + ` FROM tasks`
+	query := `SELECT ` + TaskAllColumns[0] + ` FROM tasks`
 	args := []interface{}{}
 	conditions := []string{}
 	argIndex := 1

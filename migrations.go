@@ -15,7 +15,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 	created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 	updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     scheduled_at TIMESTAMP,
-    max_retry INTEGER NOT NULL,
     retry_count INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS tasks_status_priority_scheduled_at_created_at_idx 

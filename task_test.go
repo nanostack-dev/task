@@ -34,55 +34,135 @@ func GeneratePayload() MyPayload {
 
 var taskName = "test_task"
 
-func TestTask(t *testing.T) {
-	ctx := context.Background()
+// Payload validation helper function
+func validatePayload(t *testing.T, expected, actual MyPayload) {
+	// Compare Title and Description directly
+	assert.EqualValues(t, expected.Title, actual.Title)
+	assert.EqualValues(t, expected.Description, actual.Description)
+
+	// Normalize and compare DatePtr
+	require.NotNil(t, expected.DatePtr)
+	require.NotNil(t, actual.DatePtr)
+	assert.True(t, expected.DatePtr.Equal(*actual.DatePtr), "DatePtr should match")
+
+	// Compare SubPayload
+	if expected.SubPayload != nil && actual.SubPayload != nil {
+		assert.EqualValues(t, expected.SubPayload.SubTitle, actual.SubPayload.SubTitle)
+	} else {
+		assert.Equal(t, expected.SubPayload, actual.SubPayload)
+	}
+}
+
+func initializeTaskFramework(t *testing.T, dsn string) {
 	err := task.InitNanostackTask(
-		task.TaskInitOptions{
-			DSN:          dsn,
+		task.TaskFrameworkConfig{
+			DatabaseDSN:  dsn,
 			WorkerCount:  5,
-			PollInterval: time.Duration(1) * time.Second,
+			PollInterval: 500 * time.Millisecond,
+			Logger:       nil,
+			RetryConfig:  nil,
 		},
 	)
-	ids := make(map[string]bool)
+	require.NoError(t, err, "Failed to initialize NanostackTask framework")
+}
+
+func subscribeToTask(
+	t *testing.T,
+	taskName string,
+	handler func(payload MyPayload, taskReceived *task.Task) error,
+) {
+	err := task.SubscribeWithTask(taskName, handler)
+	require.NoError(t, err, "Failed to subscribe to task")
+}
+
+func sendTasks(
+	ctx context.Context, t *testing.T, taskName string, payload MyPayload, count int,
+) sync.Map {
+	var ids sync.Map
+	for i := 0; i < count; i++ {
+		taskID, err := task.SendTask(ctx, taskName, payload)
+		require.NoError(t, err, "Failed to send task")
+		ids.Store(taskID, true)
+	}
+	return ids
+}
+
+func sendScheduledTask(
+	ctx context.Context, t *testing.T, taskName string, payload MyPayload, scheduledAt time.Time,
+) string {
+	taskID, err := task.SendTaskWithOpts(
+		ctx, taskName, payload, task.TaskOptions{
+			ScheduledAt: &scheduledAt,
+		},
+	)
+	require.NoError(t, err, "Failed to send scheduled task")
+	return taskID
+}
+
+func waitForTasks(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+		task.StopNanostackTask()
+	}()
+
+	select {
+	case <-done:
+		// Test completed
+	case <-time.After(timeout):
+		t.Fatalf("Test timed out after %v", timeout)
+	}
+}
+
+func TestTask(t *testing.T) {
+	ctx := context.Background()
+	initializeTaskFramework(t, dsn)
+
 	expectedPayload := GeneratePayload()
 	wg := sync.WaitGroup{}
-	err = task.SubscribeWithTask(
-		taskName, func(payload MyPayload, taskReceived *task.Task) error {
-			// Compare Title and Description directly
-			assert.EqualValues(t, expectedPayload.Title, payload.Title)
-			assert.EqualValues(t, expectedPayload.Description, payload.Description)
+	ids := sendTasks(ctx, t, taskName, expectedPayload, 10)
 
-			// Normalize and compare DatePtr
-			require.NotNil(t, expectedPayload.DatePtr)
-			require.NotNil(t, payload.DatePtr)
-			assert.True(t, expectedPayload.DatePtr.Equal(*payload.DatePtr), "DatePtr should match")
-
-			// Compare SubPayload
-			if expectedPayload.SubPayload != nil && payload.SubPayload != nil {
-				assert.EqualValues(
-					t, expectedPayload.SubPayload.SubTitle, payload.SubPayload.SubTitle,
-				)
-			} else {
-				assert.Equal(t, expectedPayload.SubPayload, payload.SubPayload)
-			}
-
-			// Ensure task ID is correct
-			_, ok := ids[taskReceived.ID]
-			require.True(t, ok)
-			ids[taskReceived.ID] = false
+	subscribeToTask(
+		t, taskName, func(payload MyPayload, taskReceived *task.Task) error {
+			validatePayload(t, expectedPayload, payload)
+			_, ok := ids.Load(taskReceived.ID)
+			require.True(t, ok, "Task ID not found in the map")
+			ids.Delete(taskReceived.ID)
 			wg.Done()
 			return nil
 		},
 	)
-	require.NoError(t, err)
 
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		taskID, err := task.SendTask(ctx, taskName, expectedPayload)
-		require.NoError(t, err)
-		ids[taskID] = true
-	}
-	wg.Wait()
+	wg.Add(10)
+	waitForTasks(t, &wg, 10*time.Second)
+}
 
-	require.NoError(t, err)
+func TestScheduleTask(t *testing.T) {
+	ctx := context.Background()
+	initializeTaskFramework(t, dsn)
+
+	expectedPayload := GeneratePayload()
+	now := time.Now()
+	future := now.Add(5 * time.Second)
+
+	taskID := sendScheduledTask(ctx, t, taskName, expectedPayload, future)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	subscribeToTask(
+		t, taskName, func(payload MyPayload, taskReceived *task.Task) error {
+			validatePayload(t, expectedPayload, payload)
+			nowReceive := time.Now()
+			assert.Less(
+				t, nowReceive.Sub(future), 1*time.Second,
+				"Task was not received within expected time",
+			)
+			assert.Equal(t, taskID, taskReceived.ID, "Task ID mismatch")
+			wg.Done()
+			return nil
+		},
+	)
+
+	waitForTasks(t, &wg, 10*time.Second)
 }
