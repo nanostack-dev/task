@@ -9,7 +9,7 @@ import (
 )
 
 type Repository struct {
-	DB *sql.DB
+	DB Querier
 }
 
 // CreateTask inserts a new task into the database.
@@ -19,9 +19,10 @@ func (r *Repository) CreateTask(ctx context.Context, task *Task) (*Task, error) 
 		VALUES (%s)
 		RETURNING %s;
 	`
+	querier := GetQueryOrTransaction(ctx, r.DB)
 	query = fmt.Sprintf(query, TaskAllColumns[0], TaskAllColumns[1], TaskAllColumns[0])
 	logger.Debugf("Query: %s", query)
-	row := r.DB.QueryRowContext(
+	row := querier.QueryRowContext(
 		ctx, query,
 		task.ID,
 		task.Name,

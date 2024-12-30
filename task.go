@@ -13,6 +13,7 @@ import (
 type TaskOptions struct {
 	Priority    *int       // Optional priority of the task.
 	ScheduledAt *time.Time // Optional time to schedule the task.
+	Tx          *sql.Tx    // Optional transaction to use for task processing.
 }
 
 // Type of backoff strategy for retries.
@@ -84,7 +85,7 @@ func computeBackoff(retryOptions TaskRetryConfig, retryCount int) time.Duration 
 	return duration
 }
 
-// InitNanostack initializes the task processing system.
+// InitNanostackTask InitNanostack initializes the task processing system.
 func InitNanostackTask(options TaskFrameworkConfig) error {
 	if options.Logger != nil {
 		SetLogger(options.Logger)
@@ -166,6 +167,11 @@ func SubscribeWithOpts[T any](
 	return nil
 }
 
+// SendTaskTx sends a task to the queue using a transaction.
+func SendTaskTx(ctx context.Context, tx *sql.Tx, name string, payload any) (string, error) {
+	return SendTaskWithOpts(ctx, name, payload, TaskOptions{defaultTaskOptions.Priority, nil, tx})
+}
+
 // SendTask sends a task to the queue.
 func SendTask(ctx context.Context, name string, payload any) (string, error) {
 	return SendTaskWithOpts(ctx, name, payload, defaultTaskOptions)
@@ -176,9 +182,14 @@ func SendTaskWithOpts(ctx context.Context, name string, payload any, opts TaskOp
 	string, error,
 ) {
 	marshal, err := json.Marshal(payload)
+
 	if err != nil {
 		return "", err
 	}
+	if opts.Tx != nil {
+		logger.Debugf("Using transaction for task %s with payload %v", name, marshal)
+	}
+
 	now := time.Now()
 	task := &Task{
 		ID:          uuid.NewString(),
@@ -191,7 +202,7 @@ func SendTaskWithOpts(ctx context.Context, name string, payload any, opts TaskOp
 		ScheduledAt: opts.ScheduledAt,
 		RetryCount:  0,
 	}
-	createdTask, err := repository.CreateTask(ctx, task)
+	createdTask, err := repository.CreateTask(SetTransaction(opts.Tx, ctx), task)
 	if err != nil {
 		return "", err
 	}

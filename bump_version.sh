@@ -39,5 +39,4 @@ git push origin "$new_version"
 echo "Version updated and pushed: $new_version"
 
 GOPROXY=proxy.golang.org go list -m github.com/nanostack-dev/task@$new_version
-GOPROXY=proxy.golang.org go list -m github.com/nanostack-dev/task@latest
 echo "Updated task to $new_version"
