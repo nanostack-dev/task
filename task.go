@@ -99,6 +99,10 @@ func InitNanostackTask(options TaskFrameworkConfig) error {
 	if err != nil {
 		return err
 	}
+	err = InitDB(db)
+	if err != nil {
+		return err
+	}
 	err = db.Ping()
 	if err != nil {
 		return err
