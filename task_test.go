@@ -43,7 +43,10 @@ func validatePayload(t *testing.T, expected, actual MyPayload) {
 	// Normalize and compare DatePtr
 	require.NotNil(t, expected.DatePtr)
 	require.NotNil(t, actual.DatePtr)
-	assert.True(t, expected.DatePtr.Equal(*actual.DatePtr), "DatePtr should match")
+	assert.True(
+		t,
+		expected.DatePtr.Truncate(time.Nanosecond).Equal(actual.DatePtr.Truncate(time.Nanosecond)),
+	)
 
 	// Compare SubPayload
 	if expected.SubPayload != nil && actual.SubPayload != nil {
@@ -117,7 +120,7 @@ func waitForTasks(t *testing.T, wg *sync.WaitGroup, timeout time.Duration) {
 
 func TestTask(t *testing.T) {
 	ctx := context.Background()
-	initializeTaskFramework(t, dsn)
+	initializeTaskFramework(t, Dsn)
 
 	expectedPayload := GeneratePayload()
 	wg := sync.WaitGroup{}
@@ -140,7 +143,7 @@ func TestTask(t *testing.T) {
 
 func TestScheduleTask(t *testing.T) {
 	ctx := context.Background()
-	initializeTaskFramework(t, dsn)
+	initializeTaskFramework(t, Dsn)
 
 	expectedPayload := GeneratePayload()
 	now := time.Now()

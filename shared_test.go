@@ -14,7 +14,7 @@ import (
 )
 
 var TestDb *sql.DB
-var dsn string
+var Dsn string
 
 func TestMain(m *testing.M) {
 	TestDb = SetupTestDB(m)
@@ -50,12 +50,12 @@ func SetupTestDB(t *testing.M) *sql.DB {
 	}
 
 	// Connect to the database
-	dsn, err = container.ConnectionString(ctx, "sslmode=disable")
+	Dsn, err = container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		panic("failed to get connection string")
 	}
 
-	TestDb, err = sql.Open("postgres", dsn)
+	TestDb, err = sql.Open("postgres", Dsn)
 	if err != nil {
 		panic("failed to open database")
 	}

@@ -63,7 +63,7 @@ var (
 		Priority: ToPointer(1),
 	}
 	repository    *Repository
-	subscriptions map[string]TaskSubscription = make(map[string]TaskSubscription)
+	subscriptions map[string][]TaskSubscription = make(map[string][]TaskSubscription)
 	taskQueue     chan *Task
 	quit          chan struct{}
 	wg            sync.WaitGroup
@@ -131,7 +131,7 @@ func StopNanostackTask() {
 	close(quit)
 	wg.Wait()
 	close(taskQueue)
-	subscriptions = make(map[string]TaskSubscription)
+	subscriptions = make(map[string][]TaskSubscription)
 	logger.Infof("Stopped task processing")
 }
 
@@ -154,20 +154,29 @@ func SubscribeWithOpts[T any](
 	if opts == nil {
 		opts = defaultTaskSettings.RetryConfig
 	}
-	if _, ok := subscriptions[name]; ok {
-		logger.Errorf("Subscription for task %s already exists, it will be overwritten", name)
+	var subscriptionsFn []TaskSubscription
+	if subsFnExisting, exists := subscriptions[name]; exists {
+		logger.Debugf(
+			"Subscription for task %s already have len %d function and adding more", name,
+			len(subsFnExisting),
+		)
+		subscriptionsFn = subsFnExisting
 	}
-	subscriptions[name] = TaskSubscription{
-		Name: name,
-		Handler: func(payload any, task *Task) error {
-			var genericPayload T
-			if err := json.Unmarshal(payload.(json.RawMessage), &genericPayload); err != nil {
-				return err
-			}
-			return handler(genericPayload, task)
+	logger.Infof("Subscribing to task %s with retry config %+v", name, opts)
+	subscriptionsFn = append(
+		subscriptionsFn, TaskSubscription{
+			Name: name,
+			Handler: func(payload any, task *Task) error {
+				var genericPayload T
+				if err := json.Unmarshal(payload.(json.RawMessage), &genericPayload); err != nil {
+					return err
+				}
+				return handler(genericPayload, task)
+			},
+			RetryConfig: opts,
 		},
-		RetryConfig: opts,
-	}
+	)
+	subscriptions[name] = subscriptionsFn
 	return nil
 }
 
@@ -223,44 +232,51 @@ func worker(workerNumber int) {
 	defer wg.Done()
 	for task := range taskQueue {
 		logger.Infof("Worker %d processing task %s", workerNumber, task.ID)
-		if subscription, exists := subscriptions[task.Name]; exists {
-			if err := subscription.Handler(task.Payload, task); err != nil {
-				logger.Errorf("Error processing task %s: %v", task.Name, err)
-				task.IncrementRetryCount()
-				status := Pending
-				if !task.IsRetryable(*subscription.RetryConfig.MaxAttempts) {
-					status = Failed
-					logger.Errorf("Task %s has reached max retries", task.ID)
-				}
-				backOffComputed := computeBackoff(*subscription.RetryConfig, task.RetryCount)
-				scheduledAt := time.Now().Add(backOffComputed)
-				if err != nil {
-					logger.Errorf("Failed to compute backoff: %v", err)
-				}
-				logger.Infof("Retrying task %s in %s at %s", task.ID, backOffComputed, scheduledAt)
-				if err := repository.UpdateTask(
-					context.Background(), task.ID,
-					TaskUpdates{
-						Status:      ToPointer(status),
-						Priority:    ToPointer(task.Priority),
-						ScheduledAt: ToPointer(scheduledAt),
-						RetryCount:  ToPointer(task.RetryCount),
-					},
-				); err != nil {
-					logger.Errorf("Failed to update task %s: %v", task.ID, err)
-				}
-			} else {
-				logger.Infof("Task %s processed successfully", task.ID)
-				if err := repository.UpdateTask(
-					context.Background(), task.ID,
-					TaskUpdates{
-						Status:     ToPointer(Completed),
-						RetryCount: ToPointer(task.RetryCount),
-					},
-				); err != nil {
-					logger.Errorf("Failed to update task %s: %v", task.ID, err)
+		if subscriptionFns, exists := subscriptions[task.Name]; exists {
+			logger.Infof("Starting task %s with payload %s", task.ID, task.Payload)
+			for _, subscription := range subscriptionFns {
+
+				if err := subscription.Handler(task.Payload, task); err != nil {
+					logger.Errorf("Error processing task %s: %v", task.Name, err)
+					task.IncrementRetryCount()
+					status := Pending
+					if !task.IsRetryable(*subscription.RetryConfig.MaxAttempts) {
+						status = Failed
+						logger.Errorf("Task %s has reached max retries", task.ID)
+					}
+					backOffComputed := computeBackoff(*subscription.RetryConfig, task.RetryCount)
+					scheduledAt := time.Now().Add(backOffComputed)
+					if err != nil {
+						logger.Errorf("Failed to compute backoff: %v", err)
+					}
+					logger.Infof(
+						"Retrying task %s in %s at %s", task.ID, backOffComputed, scheduledAt,
+					)
+					if err := repository.UpdateTask(
+						context.Background(), task.ID,
+						TaskUpdates{
+							Status:      ToPointer(status),
+							Priority:    ToPointer(task.Priority),
+							ScheduledAt: ToPointer(scheduledAt),
+							RetryCount:  ToPointer(task.RetryCount),
+						},
+					); err != nil {
+						logger.Errorf("Failed to update task %s: %v", task.ID, err)
+					}
+				} else {
+					logger.Infof("Task %s processed successfully", task.ID)
+					if err := repository.UpdateTask(
+						context.Background(), task.ID,
+						TaskUpdates{
+							Status:     ToPointer(Completed),
+							RetryCount: ToPointer(task.RetryCount),
+						},
+					); err != nil {
+						logger.Errorf("Failed to update task %s: %v", task.ID, err)
+					}
 				}
 			}
+
 		} else {
 			logger.Warnf("No handler found for task %s", task.Name)
 		}
