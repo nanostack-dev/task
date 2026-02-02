@@ -14,3 +14,6 @@ Lightweight persistent task queue for Go applications.
 - Ensure handlers are idempotent to support retries.
 - Monitor task queue health and worker performance.
 - Use transactions when creating tasks alongside business logic.
+
+## Tools & MCP
+- When working with external libraries, **use the Context7 MCP** for accurate usage and API details.
